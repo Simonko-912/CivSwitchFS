@@ -1,5 +1,10 @@
 // Build and send the payload to a running CivSwitch Remote JS Loader.
 //
+// The LDN flow (CivSwitch-LDN-NX) is preferred: `npm run build` writes
+// payload.js to the repository root; copy it to switch/payload.js on the
+// SD card and let the app deliver it over local wireless (ZL). This tool
+// is the direct-IP fallback (Wi-Fi or the LDN address shown by the app).
+//
 // Usage:
 //   node tools/send.mjs [--entry <file>] <console-ip> [port] [entry]
 //   npm run send -- <console-ip> [port]

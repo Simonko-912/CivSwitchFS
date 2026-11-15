@@ -17,9 +17,11 @@ Smol demo https://streamable.com/bhgobg
 
 ## Requirements
 
-- Node.js **20 or later** and npm
-- A Switch 2 with the CivSwitch Remote JS Loader already running and reachable
-  on the local network when installing persistence or sending a payload
+- Node.js **20 or later** and npm (only needed to rebuild the payload)
+- A Switch 2 with the CivSwitch Remote JS Loader already running
+- [CivSwitch-LDN-NX](https://github.com/Simonko-912/civswitch-ldn-nx) on a
+  Switch 1: it delivers `payload.js` over local wireless (LDN), so neither a
+  computer nor a Wi-Fi network is needed
 
 ## Usage
 
@@ -37,6 +39,10 @@ With the CivSwitch Remote JS Loader running, install the persistent image:
 npm run persist:install -- <console-ip> [--minify-payload]
 ~~~
 
+`<console-ip>` may be the Wi-Fi address or the local-wireless address of the
+Switch 2. With an LDN-only setup (no computer on the network), use the
+CivSwitch-LDN-NX app's ZR save install path instead. 
+
 Future launches from that save start the exploit, loader, and
 payload automatically, without a computer or network connection. 
 
@@ -45,14 +51,25 @@ The installer does not back up the old save.
 ### Launch the exploit
 
 If you are not going for persistence, just start the CivSwitch Remote JS Loader
-using your usual CivSwitch setup. Then send the payload 
+using your usual CivSwitch setup. Then deliver the payload over local
+wireless with CivSwitch-LDN-NX:
+
+1. `npm run build` writes the single-file payload to `payload.js` in the
+   repository root (a prebuilt copy is committed, so this step can be
+   skipped). 
+2. Copy that file to `switch/payload.js` on the SD card of the Switch 1
+   running CivSwitch-LDN-NX. 
+3. Launch CivSwitch-LDN-NX, join the lobby with the Switch 2, start the
+   loader (R), and press **ZL** to send `payload.js` over local wireless. 
+
+Wait for **`You just Civ Sevened your machine, congrats`** which obviously means success :tada: !
+Then, the loader automatically shows `Awaiting payload at <ip>:9026` and you are free to send payloads.
+
+A computer on the same network can still push payloads directly:
 
 ~~~sh
 npm run send -- <console-ip>
 ~~~
-
-Wait for **`You just Civ Sevened your machine, congrats`** which obviously means success :tada: !
-Then, the loader automatically shows `Awaiting payload at <ip>:9026` and you are free to send payloads.
 
 ### Booting faster next time (this will be automatised eventually)
 
