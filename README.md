@@ -84,14 +84,10 @@ A computer on the same network can still push payloads directly:
 npm run send -- <console-ip>
 ~~~
 
-<<<<<<< HEAD
-### Booting faster next time (this will be automatised eventually)
-=======
 Wait for **`You just Civ Sevened your machine, congrats`** which obviously means success :tada: !
 Then, the loader automatically shows `Awaiting payload at <ip>:9026` and you are free to send payloads.
 
 ### Timing calibration
->>>>>>> f325ac04a076fb664d8336ffbef55384a86778c5
 
 Without a valid saved timing file, the payload starts with this schedule, in nanoseconds:
 
