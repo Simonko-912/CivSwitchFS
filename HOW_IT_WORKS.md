@@ -74,7 +74,7 @@ flowchart TD
 The outer loop starts with 10 complete attempts. Each accepted timing adjustment can add one attempt, up to **30**.
 
 > [!NOTE]
-> A retry starts only after cleanup confirms that workers have stopped, temporary allocations are freed, the candidate cache is retired, and `/hole` is gone. If cleanup cannot prove the state is safe, the exploit stops instead of carrying that state into another race.
+> A retry starts only after cleanup confirms that workers have stopped, temporary allocations are freed, the candidate cache is verified safe or retired, and `/hole` is gone. If cleanup cannot prove the state is safe, the exploit stops instead of carrying that state into another race.
 
 ## 1. Prepare and qualify the race
 
@@ -290,19 +290,21 @@ flowchart TD
     C --> D{Timing, heap, and path checks pass?}
     D -->|No| E{Attempts left for this piece?}
     E -->|Yes| C
-    E -->|No| X[Stop attempt and retire candidate cache]
+    E -->|No| N{Original bytes read back?}
     D -->|Yes| F{All seven pieces copied?}
     F -->|No| B
     F -->|Yes| G[Read 2 MiB at offset 0x1400000]
     G --> H{Prefix matches bytes from offset 0?}
-    H -->|No| X
+    H -->|No| N
     H -->|Yes| I[Alias confirmed]
     I --> J[Read adjacent fsp-srv heap for discovery]
+    N -->|Yes| O[Close candidate without retirement waves]
+    N -->|No or uncertain| X[Retire candidate cache]
 ```
 
 **Discovery starts with a 2 MiB read at offset `0x1400000`.** Its first bytes must match the values primed at offset `0`.
 
-**Once the first copy starts, cleanup retires the candidate cache,** even if a later piece fails. A partial copy leaves its mapping uncertain, so discovery cannot safely reuse it.
+**If alias installation was attempted, cleanup checks the candidate read at offset `0x1400000` before launching retirement waves.** If it returns the original bytes, cleanup verifies that the alias is inactive and closes the candidate without the extra waves. If it returns the primed alias bytes, unexpected data, or a read error, cleanup runs the retirement path; an incomplete copy still leaves the mapping uncertain.
 
 > [!NOTE]
 > **The cache entry is tagged for offset 20 MiB but holds bytes primed at offset 0.** A widened read exposes the mismatch, then crosses the 16 KiB cache block into nearby `fsp-srv` memory. Discovery uses that memory window to find the objects it needs to promote.

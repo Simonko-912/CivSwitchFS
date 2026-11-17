@@ -13,6 +13,8 @@ This is payload provides **access to FS privileges** through an elevated fsp-srv
 
 ## A bit of a preface
 
+Smol demo (updated) https://streamable.com/wtcdnk
+
 CivSwitchFS is **semi-untethered**, RPC was fully removed :tada: ! It should also be more consistent for any hardware.
 
 **It's intended for devs**, as all I give is a god `fsp-srv` handle (full FS) for you to play with. The rest is for you to figure out.
@@ -82,29 +84,30 @@ A computer on the same network can still push payloads directly:
 npm run send -- <console-ip>
 ~~~
 
+<<<<<<< HEAD
 ### Booting faster next time (this will be automatised eventually)
+=======
+Wait for **`You just Civ Sevened your machine, congrats`** which obviously means success :tada: !
+Then, the loader automatically shows `Awaiting payload at <ip>:9026` and you are free to send payloads.
 
-After success, the payload prints the working `roleDelays` and `guardDelays`
-values in nanoseconds. To use them as the starting schedule next time, replace
-the arrays in [`src/core/config.mjs`](src/core/config.mjs#L44-L47):
+### Timing calibration
+>>>>>>> f325ac04a076fb664d8336ffbef55384a86778c5
+
+Without a valid saved timing file, the payload starts with this schedule, in nanoseconds:
 
 ~~~js
 var roleDelays = [0, 300000, 350000, 450000, 550000, 650000, 1000000, 1200000, 1300000, 1700000];
 var guardDelays = [150000, 300000];
 ~~~
 
-The trigger's initial sleep is 1,600,000 ns. The [Kurumuz](https://gitlab.com/kurumuz/ns2jb)
-reference schedule used these instead (might help if it worked for you on those)
-
-~~~js
-var roleDelays = [0, 300000, 350000, 450000, 550000, 650000, 1700000, 2000000, 2150000, 2800000];
-var guardDelays = [0, 150000];
-~~~
-
-If you use the persisted payload, you ofc need to rerun the installer so its saved image includes the new timings.
-
 > [!NOTE]
-> You can play with the delays and MORE in `src/core/config.mjs`, try some shit (but don't brick pls) !
+> If timings were adjusted during a successful run, they will be saved under `save:/civswitchfs/timings.json` and will be reused the next time the exploit is beeing executed.
+
+### Controls
+
+- **X**: restore the original timings (starting next attempt, will also delete the config file at the end)
+- **B**: stops after the current wave clean up
+- **Y**: toggle between normal and verbose summaries
 
 ## Example FS usage
 
@@ -116,7 +119,6 @@ An example can be found in `examples/user-storage`.
 ## Notes
 
 - The auto timing calibration is not perfect yet, some freezes can happen
-- Timing configuration, retries and shit will go to a persisted config file soon enough
 - THERE IS SO MUCH MORE to be done, I'm just releasing now so you guys can study the semi-untethered stuff
 - You can learn about how the exploit works [there](https://github.com/ItsNerisma/CivSwitchFS/blob/main/HOW_IT_WORKS.md)
 
