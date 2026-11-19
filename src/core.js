@@ -108,7 +108,15 @@ const MAX_TIMING_DELAY_NS = 10000000;
 
 export async function run() {
     installLoaderLogPatch();
-    const previousVerboseLogging = setVerboseLogging(VERBOSE_LOGGING);
+    const defaultTimingConfig = createFspIdentityConfig();
+    const experimentMode = defaultTimingConfig.CANARY_BENCH_MODE === true;
+
+    if (experimentMode) {
+        await clearVisualLog();
+    }
+
+    const previousVerboseLogging = setVerboseLogging(
+        VERBOSE_LOGGING || experimentMode);
     const timingPersistence = {
         checked: false,
         loaded: false,
@@ -122,9 +130,10 @@ export async function run() {
         saveError: null,
         resetLogPromise: Promise.resolve(),
         stopLogPromise: Promise.resolve(),
-        verbosityLogPromise: Promise.resolve()
+        verbosityLogPromise: Promise.resolve(),
+        currentAttempt: 0,
+        deferredWaveLogLines: []
     };
-    const defaultTimingConfig = createFspIdentityConfig();
     const builtInTimingSchedule = {
         roleDelays: defaultTimingConfig.roleDelays.slice(),
         guardDelays: defaultTimingConfig.guardDelays.slice(),
@@ -132,6 +141,8 @@ export async function run() {
         baselineGuardDelays: defaultTimingConfig.guardDelays.slice()
     };
     let inputControls = null;
+    let positiveAttemptsTotal = 0;
+    let qualifiedCanaryFlipsTotal = 0;
 
     try {
         function queueVerbosityMessage(message) {
@@ -170,7 +181,6 @@ export async function run() {
 
         let canaryTimingSchedule = null;
         let attemptLimit = BASE_ATTEMPTS;
-        let positiveAttemptsTotal = 0;
         let positiveWindowsTotal = 0;
 
         await log("CivSwitchFS (no RPC) by Nerisma\n" +
@@ -185,6 +195,7 @@ export async function run() {
             if (timingPersistence.stopRequested) return;
             await log("======== ATTEMPT " + attempt + " ========");
             if (timingPersistence.stopRequested) return;
+            timingPersistence.currentAttempt = attempt;
             if (timingPersistence.resetPending) {
                 canaryTimingSchedule = copyCanaryTimingSchedule(
                     builtInTimingSchedule);
@@ -198,6 +209,7 @@ export async function run() {
                 attempt < MAX_TOTAL_ATTEMPTS, timingPersistence);
             positiveAttemptsTotal += result.positiveAttempts || 0;
             positiveWindowsTotal += result.positiveWindows || 0;
+            qualifiedCanaryFlipsTotal += result.qualifiedCanaryFlips || 0;
 
             if (timingPersistence.stopRequested || result.stoppedByUser)
                 return;
@@ -290,8 +302,33 @@ export async function run() {
             inputControls?.clearRunActions?.();
             inputControls?.dispose?.();
             setVerboseLogging(previousVerboseLogging);
+            try {
+                await flushDeferredWaveLogLines(
+                    timingPersistence.deferredWaveLogLines,
+                    formatCanaryFlipSummary(qualifiedCanaryFlipsTotal,
+                        positiveAttemptsTotal));
+            } catch (error) {
+                try {
+                    await log("Could not display deferred wave logs: " +
+                        String(error?.message || error));
+                } catch (logError) {}
+            }
         }
     }
+}
+
+function formatCanaryFlipSummary(qualifiedFlips, positiveWaves) {
+    // Controls are excluded, and only flips passing every canary gate count.
+    if (!positiveWaves) {
+        return "CANARY FLIP SUMMARY: flips=0 non-flips=0 rate=n/a " +
+            "(no positive waves).";
+    }
+
+    const nonFlips = positiveWaves - qualifiedFlips;
+    const rate = (100 * qualifiedFlips / positiveWaves).toFixed(1);
+    return "CANARY FLIP SUMMARY: flips=" + qualifiedFlips +
+        " non-flips=" + nonFlips + " rate=" + rate + "% (" +
+        qualifiedFlips + "/" + positiveWaves + " positive waves).";
 }
 
 function copyCanaryTimingSchedule(schedule) {
@@ -339,6 +376,27 @@ async function beginCleanupLog(attemptState) {
     if (attemptState.cleanupLogStarted) return;
     attemptState.cleanupLogStarted = true;
     await log("Cleaning up...");
+}
+
+async function flushDeferredWaveLogLines(lines, finalSummary = null) {
+    const hasWaveLines = Array.isArray(lines) && lines.length > 0;
+    if (!hasWaveLines && !finalSummary) {
+        return;
+    }
+
+    if (hasWaveLines) {
+        // The logger appends synchronously; wait once after all chunks are queued.
+        void log("Detailed wave output follows; it was held until the run ended.");
+        for (let flushFrom = 0; flushFrom < lines.length; flushFrom += 6) {
+            void log(lines.slice(flushFrom, flushFrom + 6).join("\n"));
+        }
+        lines.length = 0;
+    }
+
+    if (finalSummary) {
+        void log(finalSummary);
+    }
+    await log("Log display done");
 }
 
 function isValidTimingArray(values, expectedLength) {
@@ -680,6 +738,7 @@ async function runTrackedAttempt(canaryTimingSchedule,
     const attemptState = {
         permissionProven: false,
         stoppedByUser: false,
+        qualifiedCanaryFlips: 0,
         pidPromotionVerified: false,
         canaryTimingSchedule: copyCanaryTimingSchedule(canaryTimingSchedule),
         positiveAttempts: 0,
@@ -947,6 +1006,9 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
     var heapBaseline = readAllocationCounters(handles.rootSession, pktBuf);
     await log("Heap baseline: counter5=0x" +
         (heapBaseline ? heapBaseline[5].toString(16) : "unavailable"));
+    await verboseLog("Heap baseline counters: " + (heapBaseline
+        ? heapBaseline.map(value => value.toString(16)).join(",")
+        : "unavailable"));
 
     const scratch = await createScratchTree({
         config, helpers,
@@ -1058,7 +1120,7 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
     }
 
     const pathPair = await checkPathPair({
-        helpers, SCRATCH_DIR: scratch.SCRATCH_DIR,
+        config, helpers, SCRATCH_DIR: scratch.SCRATCH_DIR,
         fillerDst: buffers.fillerDst, fillerSrc: buffers.fillerSrc,
         guardPath: buffers.guardPath, guardPathC: buffers.guardPathC,
         rootSession: handles.rootSession,
@@ -1135,13 +1197,17 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
         renamePathBuffers,
         timingBaseline,
         allowTimingAdjustments,
-        shouldStop: () => timingPersistence?.stopRequested === true
+        shouldStop: () => timingPersistence?.stopRequested === true,
+        deferredVerboseLines: timingPersistence?.deferredWaveLogLines,
+        attemptNumber: timingPersistence?.currentAttempt
     });
 
     cleanupWorkerStateSafe = control?.workerStateSafe === true;
     attemptState.stoppedByUser = control?.stoppedByUser === true;
     attemptState.positiveAttempts = control?.positiveAttempts || 0;
     attemptState.positiveWindows = control?.positiveWindows || 0;
+    attemptState.qualifiedCanaryFlips =
+        control?.positiveQualifiedFlips || 0;
     attemptState.timingAdjustments = control?.timingAdjustments || [];
     attemptState.canaryTimingSchedule = copyCanaryTimingSchedule(
         control?.timingSchedule) || attemptState.canaryTimingSchedule;
@@ -1189,6 +1255,19 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
                 "skipping later phases.",
             scratch, handles, helpers,
             workerStateSafe: control?.workerStateSafe === true
+        });
+        return;
+    }
+
+    if (config.CANARY_BENCH_MODE && control.canaryQualified === true) {
+        await log("CANARY BENCH: qualified flip achieved; " +
+            "skipping candidate storage, alias and promotion for this " +
+            "attempt.");
+        await stopAndCleanup({
+            reason: "Canary bench mode; qualified flip achieved; " +
+                "skipping candidate storage, cache alias and promotion.",
+            scratch, handles, helpers,
+            workerStateSafe: control.workerStateSafe
         });
         return;
     }

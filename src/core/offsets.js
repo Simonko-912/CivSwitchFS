@@ -40,6 +40,9 @@ const SVC_StartThread = sdk_base + 0x168b44n; // svc #0x09; w0=handle
 const SVC_ExitThread = sdk_base + 0x168b4cn; // svc #0x0A; never returns. NOT svc #0x07 (ExitProcess!)
 const SVC_GetThreadPriority = sdk_base + 0x168b5cn; // x0=&out_prio, w1=handle
 const SVC_GetThreadCoreMask = sdk_base + 0x168b7cn; // x0=&out_core, x1=&out_mask, w2=handle
+// svcSetThreadCoreMask (svc #0x0F): w0=handle, w1=ideal_core, x2=affinity_mask.
+// Offset discovered at runtime by scanning near SVC_GetThreadCoreMask.
+var SVC_SetThreadCoreMask = 0n;
 const SVC_WaitSync = sdk_base + 0x168bf4n; // x0=&out_idx, x1=handles, w2=count, x3=timeout_ns
 
 // -- nn::os thread manager list (for borrowing priority from live threads) --
