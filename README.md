@@ -48,7 +48,7 @@ npm install
 With the CivSwitch Remote JS Loader running, install the persistent image:
 
 ~~~sh
-npm run persist:install -- <console-ip> [--minify-payload]
+npm run persist -- <console-ip> [--minify-payload]
 ~~~
 
 `<console-ip>` may be the Wi-Fi address or the local-wireless address of the
