@@ -7,7 +7,7 @@
 > - `npm run send` / `npm run persist:install` kept as direct-IP fallback.
 
 > [!CAUTION]
-> Beware that this FS exploit is not 100% safe, it could corrupt your save, cache or worse. We had reported bricks on forks using that FS implementation as a base (BEFORE [4049cd7](https://github.com/ItsNerisma/CivSwitchFS/commit/4049cd716147bff5dd17ecb545da857f9a453a7f)). Not bricks yet reported for this repo alone, but very well could be. Read [BRICK_RISKS.md](BRICK_RISKS.md) for a full explanation.
+> Beware that this FS exploit is not 100% safe, it could corrupt your save, cache or worse. We had reported bricks on forks using that FS implementation as a base (BEFORE [4049cd7](https://github.com/ItsNerisma/CivSwitchFS/commit/4049cd716147bff5dd17ecb545da857f9a453a7f)). No bricks reported yet for this repo alone, but very well could be. Read [BRICK_RISKS.md](BRICK_RISKS.md) for a full explanation.
 
 > [!IMPORTANT]
 > Thanks to [**Slapah**](https://github.com/byizmysh/IZCIVSwitch/blob/main/NOTICE.md#upstream) for the ns2jb filesystem port to CivSwitch and [**Kurumuz**](https://gitlab.com/kurumuz/ns2jb) for the improved fork of ns2jb from [**pepsipu**](https://gitlab.com/pepsipu/ns2jb), which laid the groundwork for this research. All kudos goes to them for the Civ FS port :heart:
